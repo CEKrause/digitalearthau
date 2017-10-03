@@ -1,13 +1,14 @@
-import os
 import subprocess as sh
+import configparser
 from pathlib import Path
 
-TESTDB_NAME = 'test_db'
+import click
+
 TESTDB_CONF_FILE = Path(__file__).parent / "test_db.conf"
 PRODDB_CONF_FILE = Path(__file__).parent / "prod_db.conf"
 
 CREATE_DATABASE_TEMPLATE = """
-CREATE DATABASE {db_name}
+CREATE DATABASE {db_database}
 WITH
 OWNER = agdc_admin
 ENCODING = 'UTF8'
@@ -16,22 +17,30 @@ LC_CTYPE = 'en_AU.UTF-8'
 TABLESPACE = pg_default
 CONNECTION LIMIT = -1;
 
-GRANT ALL ON DATABASE {db_name} TO agdc_admin;
-GRANT CONNECT, TEMPORARY ON DATABASE {db_name} TO PUBLIC;
-GRANT ALL ON DATABASE {db_name} TO test;
-ALTER DATABASE {db_name} SET search_path TO "$user", public, agdc;
+GRANT ALL ON DATABASE {db_database} TO agdc_admin;
+GRANT CONNECT, TEMPORARY ON DATABASE {db_database} TO PUBLIC;
+GRANT ALL ON DATABASE {db_database} TO test;
+ALTER DATABASE {db_database} SET search_path TO "$user", public, agdc;
 """
 
 DELETE_DATABASE_TEMPLATE = """
-DROP DATABASE IF EXISTS {db_name};
+DROP DATABASE IF EXISTS {db_database};
 """
 
-DEV_CONFIG = """
+CONFIG_TEMPLATE = """
 [datacube]
-db_hostname: {hostname}
-db_port: {port}
-db_database: {db_name}
+db_hostname: {db_hostname}
+db_port: {db_port}
+db_database: {db_database}
 """
+
+
+def datacube_config(config_file):
+    """ Reads the ``datacube`` section of a configuration file. """
+    parser = configparser.ConfigParser()
+    with open(config_file) as fl:
+        parser.read_file(fl)
+    return dict(parser['datacube'])
 
 
 def run_shell(*args, **kwargs):
@@ -39,48 +48,44 @@ def run_shell(*args, **kwargs):
     return sh.check_output(*args, encoding='UTF-8', **kwargs)
 
 
-def psql_shell_command(psql_command,
-                       hostname='agdcdev-db.nci.org.au',
-                       port=6432):
-    """ Feed `psql_command` to the PostgreSQL server. """
-    return run_shell(["psql", "-h", hostname, "-p", str(port), "datacube"],
-                     input=psql_command)
+def psql_command(command, config):
+    """ Feed ``command`` to the PostgreSQL server specified in ``config``. """
+    hostname, port = [str(config[key]) for key in ['db_hostname', 'db_port']]
+    # this assumes there is a 'datacube' database running at the host
+    # can this assumption be avoided by not specifying any database at first?
+    return run_shell(["psql", "-h", hostname, "-p", port, "datacube"],
+                     input=command)
 
 
-def create_test_database(db_name=TESTDB_NAME, **kwargs):
-    """ Create an empty database. """
-    psql_command = CREATE_DATABASE_TEMPLATE.format(db_name=db_name)
-    out = psql_shell_command(psql_command, **kwargs)
-    # what do I do with the output?
-    return out
+@click.group()
+@click.option('-C', '--config-file',
+              default=TESTDB_CONF_FILE,
+              type=click.Path(exists=True, dir_okay=False),
+              help="Configuration file")
+@click.pass_context
+def cli(ctx, config_file):
+    ctx.obj['config_file'] = config_file
 
 
-def delete_test_database(db_name=TESTDB_NAME, **kwargs):
-    """ Delete a database if it exists. """
-    psql_command = DELETE_DATABASE_TEMPLATE.format(db_name=db_name)
-    out = psql_shell_command(psql_command, **kwargs)
-    # what do I do with the output?
-    return out
+@cli.command()
+@click.pass_context
+def setup(ctx):
+    config_file = ctx.obj['config_file']
+    config = datacube_config(config_file)
+    # should this go into a log?
+    print(psql_command(CREATE_DATABASE_TEMPLATE.format(**config), config))
+    # TODO: call dea_init directly
+    print(run_shell(["dea-system", "--config_file", str(config_file), "init"]))
 
+@cli.command()
+@click.pass_context
+def teardown(ctx):
+    config_file = ctx.obj['config_file']
+    config = datacube_config(config_file)
+    # should this go into a log?
+    print(psql_command(DELETE_DATABASE_TEMPLATE.format(**config), config))
 
-def create_config(config_file=TESTDB_CONF_FILE,
-                  db_name=TESTDB_NAME,
-                  hostname='agdcdev-db.nci.org.au',
-                  port=6432):
-    """ Returns the contents of a .conf file for the given parameters. """
-    with open(config_file, 'w') as fl:
-        fl.write(DEV_CONFIG.format(db_name=db_name, hostname=hostname,
-                                   port=port))
-
-
-def dea_system_init(config_file=TESTDB_CONF_FILE):
-    """ Call `dea-system init` on the datacube in the configuration file. """
-    # TODO call digitalearthau.system.init_dea directly
-    sh_command = ["dea-system", "--config_file", str(config_file), "init"]
-    out = run_shell(sh_command)
-    # what do I do with the output?
-    return out
-
+# TODO: ../move.py contains code for moving files
 
 if __name__ == '__main__':
-    pass
+    cli()
