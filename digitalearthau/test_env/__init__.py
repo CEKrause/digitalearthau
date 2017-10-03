@@ -206,9 +206,9 @@ def migrate(ctx, source_config, product, expressions):
     # collect the URIs that match query
     uris = set()
     datasets = set()
-    for product in products:
+    for prod in products:
         for dataset in find_datasets_lazy(prod_index,
-                                          product=product, **expressions):
+                                          product=prod, **expressions):
             datasets.add(dataset)
             for uri in dataset.uris:
                 uris.add(normalize_uri(uri))
