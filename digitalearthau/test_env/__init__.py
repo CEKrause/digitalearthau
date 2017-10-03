@@ -70,6 +70,7 @@ def cli(ctx, config_file):
 @cli.command()
 @click.pass_context
 def setup(ctx):
+    """Setup a test database environment."""
     config_file = ctx.obj['config_file']
     config = datacube_config(config_file)
     # should this go into a log?
@@ -80,6 +81,7 @@ def setup(ctx):
 @cli.command()
 @click.pass_context
 def teardown(ctx):
+    """Teardown a test database environment."""
     config_file = ctx.obj['config_file']
     config = datacube_config(config_file)
     # should this go into a log?
@@ -88,4 +90,4 @@ def teardown(ctx):
 # TODO: ../move.py contains code for moving files
 
 if __name__ == '__main__':
-    cli()
+    cli(obj={})
