@@ -118,4 +118,5 @@ def teardown(ctx):
 # TODO: ../move.py contains code for moving files
 
 if __name__ == '__main__':
+	#: pylint: disable=unexpected-keyword-arg
     cli(obj={})
