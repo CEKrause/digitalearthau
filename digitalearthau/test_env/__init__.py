@@ -7,7 +7,9 @@ import pathlib
 
 import click
 
-from datacube.config import LocalConfig
+from datacube.config import LocalConfig, DATACUBE_SECTION, _DEFAULT_CONF
+from datacube.index import index_connect
+from digitalearthau.system import init_dea
 
 TESTDB_CONF_FILE = pathlib.Path(__file__).parent / "test_db.conf"
 PRODDB_CONF_FILE = pathlib.Path(__file__).parent / "prod_db.conf"
@@ -38,13 +40,6 @@ DROP_DATABASE_TEMPLATE = """
 DROP DATABASE IF EXISTS {db_database};
 """
 
-DATACUBE_CONFIG_TEMPLATE = """
-[datacube]
-db_hostname: {db_hostname}
-db_port: {db_port}
-db_database: {db_database}
-"""
-
 
 def run_shell(*args, **kwargs):
     """ Subprocess with I/O done in the UTF-8 encoding. """
@@ -53,8 +48,7 @@ def run_shell(*args, **kwargs):
 
 def psql_command(command, local_config, maintenance_db='postgres'):
     """
-    Feed ``command`` to the PostgreSQL server
-    specified in ``local_config``.
+    Feed ``command`` to the PostgreSQL server specified in ``local_config``.
     """
     hostname = local_config.db_hostname
     port = local_config.db_port
@@ -74,11 +68,13 @@ def psql_command(command, local_config, maintenance_db='postgres'):
 def cli(ctx, config_file):
     """ Set up and tear down test database environments at the NCI. """
     config = configparser.ConfigParser()
+    config.read_string(_DEFAULT_CONF)
+
     with open(config_file) as fl:
         config.read_file(fl)
 
     ctx.obj['config_file'] = config_file
-    ctx.obj['datacube_section'] = dict(config['datacube'])
+    ctx.obj['datacube_section'] = dict(config[DATACUBE_SECTION])
     ctx.obj['local_config'] = LocalConfig(config,
                                           files_loaded=[str(config_file)])
 
@@ -96,10 +92,12 @@ def setup(ctx, init_users):
     command = CREATE_DATABASE_TEMPLATE.format(**obj['datacube_section'])
     click.echo(psql_command(command, obj['local_config']))
 
-    # TODO: call dea_init directly
-    click.echo(run_shell(["dea-system",
-                          "--config_file", str(obj['config_file']),
-                          "init"]))
+    # do not validate database (nothing there yet)
+    index = index_connect(obj['local_config'],
+                          application_name='setup-test-environment',
+                          validate_connection=False)
+
+    init_dea(index, init_users)
 
 
 @cli.command()
@@ -118,5 +116,5 @@ def teardown(ctx):
 # TODO: ../move.py contains code for moving files
 
 if __name__ == '__main__':
-	#: pylint: disable=unexpected-keyword-arg
+    #: pylint: disable=unexpected-keyword-arg
     cli(obj={})
