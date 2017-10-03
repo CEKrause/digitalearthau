@@ -1,11 +1,16 @@
-import subprocess as sh
+"""
+Set up and tear down test database environments at the NCI.
+"""
+import subprocess
 import configparser
-from pathlib import Path
+import pathlib
 
 import click
 
-TESTDB_CONF_FILE = Path(__file__).parent / "test_db.conf"
-PRODDB_CONF_FILE = Path(__file__).parent / "prod_db.conf"
+from datacube.config import LocalConfig
+
+TESTDB_CONF_FILE = pathlib.Path(__file__).parent / "test_db.conf"
+PRODDB_CONF_FILE = pathlib.Path(__file__).parent / "prod_db.conf"
 
 CREATE_DATABASE_TEMPLATE = """
 CREATE DATABASE {db_database}
@@ -23,11 +28,17 @@ GRANT ALL ON DATABASE {db_database} TO test;
 ALTER DATABASE {db_database} SET search_path TO "$user", public, agdc;
 """
 
-DELETE_DATABASE_TEMPLATE = """
+TERMINATE_BACKEND_TEMPLATE = """
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = '{db_database}';
+"""
+
+DROP_DATABASE_TEMPLATE = """
 DROP DATABASE IF EXISTS {db_database};
 """
 
-CONFIG_TEMPLATE = """
+DATACUBE_CONFIG_TEMPLATE = """
 [datacube]
 db_hostname: {db_hostname}
 db_port: {db_port}
@@ -35,25 +46,22 @@ db_database: {db_database}
 """
 
 
-def datacube_config(config_file):
-    """ Reads the ``datacube`` section of a configuration file. """
-    parser = configparser.ConfigParser()
-    with open(config_file) as fl:
-        parser.read_file(fl)
-    return dict(parser['datacube'])
-
-
 def run_shell(*args, **kwargs):
     """ Subprocess with I/O done in the UTF-8 encoding. """
-    return sh.check_output(*args, encoding='UTF-8', **kwargs)
+    return subprocess.check_output(*args, encoding='UTF-8', **kwargs)
 
 
-def psql_command(command, config):
-    """ Feed ``command`` to the PostgreSQL server specified in ``config``. """
-    hostname, port = [str(config[key]) for key in ['db_hostname', 'db_port']]
-    # this assumes there is a 'datacube' database running at the host
-    # can this assumption be avoided by not specifying any database at first?
-    return run_shell(["psql", "-h", hostname, "-p", port, "datacube"],
+def psql_command(command, local_config, maintenance_db='postgres'):
+    """
+    Feed ``command`` to the PostgreSQL server
+    specified in ``local_config``.
+    """
+    hostname = local_config.db_hostname
+    port = local_config.db_port
+
+    # seems like you have to connect to a database
+    # and that the maintenance database is usually called postgres
+    return run_shell(["psql", "-h", hostname, "-p", port, maintenance_db],
                      input=command)
 
 
@@ -61,31 +69,51 @@ def psql_command(command, config):
 @click.option('-C', '--config-file',
               default=TESTDB_CONF_FILE,
               type=click.Path(exists=True, dir_okay=False),
-              help="Configuration file")
+              help="Test database configuration file (default: test_db.conf)")
 @click.pass_context
 def cli(ctx, config_file):
+    """ Set up and tear down test database environments at the NCI. """
+    config = configparser.ConfigParser()
+    with open(config_file) as fl:
+        config.read_file(fl)
+
     ctx.obj['config_file'] = config_file
+    ctx.obj['datacube_section'] = dict(config['datacube'])
+    ctx.obj['local_config'] = LocalConfig(config,
+                                          files_loaded=[str(config_file)])
 
 
 @cli.command()
+@click.option('--init-users/--no-init-users',
+              is_flag=True, default=True,
+              help="Include user roles and grants (default: true)")
 @click.pass_context
-def setup(ctx):
-    """Setup a test database environment."""
-    config_file = ctx.obj['config_file']
-    config = datacube_config(config_file)
-    # should this go into a log?
-    print(psql_command(CREATE_DATABASE_TEMPLATE.format(**config), config))
+def setup(ctx, init_users):
+    """ Setup a test database environment. """
+    obj = ctx.obj
+
+    # should these go into a log?
+    command = CREATE_DATABASE_TEMPLATE.format(**obj['datacube_section'])
+    click.echo(psql_command(command, obj['local_config']))
+
     # TODO: call dea_init directly
-    print(run_shell(["dea-system", "--config_file", str(config_file), "init"]))
+    click.echo(run_shell(["dea-system",
+                          "--config_file", str(obj['config_file']),
+                          "init"]))
+
 
 @cli.command()
 @click.pass_context
 def teardown(ctx):
-    """Teardown a test database environment."""
-    config_file = ctx.obj['config_file']
-    config = datacube_config(config_file)
-    # should this go into a log?
-    print(psql_command(DELETE_DATABASE_TEMPLATE.format(**config), config))
+    """ Teardown a test database environment. """
+    obj = ctx.obj
+
+    # should these go into a log?
+    command = TERMINATE_BACKEND_TEMPLATE.format(**obj['datacube_section'])
+    click.echo(psql_command(command, obj['local_config']))
+
+    command = DROP_DATABASE_TEMPLATE.format(**obj['datacube_section'])
+    click.echo(psql_command(command, obj['local_config']))
 
 # TODO: ../move.py contains code for moving files
 
