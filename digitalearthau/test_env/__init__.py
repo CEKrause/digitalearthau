@@ -98,6 +98,8 @@ def read_config(config_file):
 @click.pass_context
 def cli(ctx, config_file):
     """ Set up and tear down test database environments at the NCI. """
+    if ctx.obj is None:
+        ctx.obj = {}
     ctx.obj['test_db'] = read_config(config_file)
 
 
@@ -240,4 +242,4 @@ def migrate(ctx, source_config, product, expressions):
 
 if __name__ == '__main__':
     #: pylint: disable=unexpected-keyword-arg
-    cli(obj={})
+    cli()
